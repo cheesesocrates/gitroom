@@ -1,0 +1,20 @@
+{
+  "name": "gitroom",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Turn a GitHub profile into a cozy pixel-art house.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "vendor": "node -e \"const f=require('fs');f.copyFileSync('node_modules/gsap/dist/gsap.min.js','public/vendor/gsap.min.js');f.copyFileSync('node_modules/mediabunny/dist/bundles/mediabunny.min.mjs','public/vendor/mediabunny.min.mjs');f.copyFileSync('node_modules/mediabunny/LICENSE','public/vendor/mediabunny.LICENSE.txt')\""
+  },
+  "dependencies": {
+    "gsap": "3.12.5",
+    "mediabunny": "1.61.4",
+    "next": "16.4.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}

@@ -1,0 +1,17 @@
+node_modules/
+.next/
+.cache/
+*.log
+.DS_Store
+*.pem
+
+# secrets: every .env file except the template
+.env*
+!.env.example
+
+# Vercel CLI project link
+.vercel/
+
+# local data: owners' saved houses, and your own "needs remake" notes from /avatars
+data/houses/
+data/avatar-flags.json

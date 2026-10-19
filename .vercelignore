@@ -1,0 +1,5 @@
+# `vercel deploy` uploads this folder as it is on disk; keep secrets and local-only data out of it
+.env*
+!.env.example
+data/houses/
+data/avatar-flags.json
