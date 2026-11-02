@@ -1,70 +1,27 @@
-import { NextResponse } from 'next/server';
-import { fetchUser, fetchAchievements, serverToken, GitHubError } from '@/lib/github';
+import { VALID_LOGIN, readGitHub } from '@/lib/github-rest';
 import { buildProfile } from '@/lib/analyze';
-import { readSession } from '@/lib/session';
+import { readPage } from '@/lib/page';
+import { readReposPages } from '@/lib/repo-page';
+import { cached, readSettings, reply, replyError } from '@/lib/server-github';
 
-export const dynamic = 'force-dynamic';
-// big accounts (like torvalds) take 10-20 seconds of GitHub queries
-export const maxDuration = 60;
+// big accounts read a dozen repo pages; GitHub usually answers in a few seconds
+export const maxDuration = 30;
 
-// Public houses are cached in memory here and at the CDN; your own house (with private repos) never is.
-const cache = new Map();
-const inflight = new Map();
-const TTL = 6 * 60 * 60 * 1000;
-const VALID = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i;
-
-async function build(login, { token, owner, includePrivate }) {
-  const [gh, achievements] = await Promise.all([fetchUser(login, { token, includePrivate }), fetchAchievements(login)]);
-  return buildProfile(gh, achievements, { owner });
-}
-
-// One GitHub read per public house, however many people open it at once.
-function publicHouse(login, fresh) {
-  const key = login.toLowerCase();
-  const hit = cache.get(key);
-  if (!fresh && hit && Date.now() - hit.t < TTL) return Promise.resolve(hit.profile);
-  if (inflight.has(key)) return inflight.get(key);
-  const job = build(login, { token: serverToken(), owner: false, includePrivate: false })
-    .then(profile => {
-      cache.set(key, { t: Date.now(), profile });
-      if (cache.size > 500) cache.delete(cache.keys().next().value);
-      return profile;
-    })
-    .finally(() => inflight.delete(key));
-  inflight.set(key, job);
-  return job;
-}
-
+// A whole house, built from public data with no token: three API calls (user, repos, house file) plus the repos'
+// public web pages. The CDN keeps it for six hours, so most visits never reach GitHub. When this server has used up
+// GitHub's free API quota, the answer is 503 "rate" and the visitor's browser makes those three calls itself.
 export async function GET(request, { params }) {
-  const { login: raw } = await params;
-  const login = String(raw || '').trim();
-  if (!VALID.test(login)) return NextResponse.json({ error: "That isn't a valid GitHub username." }, { status: 400 });
-  const sp = request.nextUrl.searchParams;
-  const session = sp.get('me') === '1' ? await readSession(request) : null;
-  const owner = !!session && session.login.toLowerCase() === login.toLowerCase();
+  const { login } = await params;
+  if (!VALID_LOGIN.test(login)) return reply({ error: "That isn't a valid GitHub username.", code: 'invalid' }, { status: 400 });
   try {
-    if (owner) {
-      try {
-        // your own token (or, with dev sign-in, the CLI's): private repos come along if you allowed them, names stay hidden
-        const token = session.dev ? serverToken() : session.token;
-        return reply(await build(login, { token, owner: true, includePrivate: !!session.private }), false);
-      } catch (e) {
-        if (!(e instanceof GitHubError) || e.status !== 401) throw e;
-        // the sign-in expired or was revoked: show the public house and ask to sign in again
-        const profile = await publicHouse(login, false);
-        return reply({ ...profile, reauth: true }, false);
-      }
-    }
-    return reply(await publicHouse(login, false), true);
+    // the owner's room picks decide which repos get counted, so the house file comes first (it's one quick read)
+    const own = await readSettings(login).catch(() => ({ settings: null }));
+    const [gh, page] = await Promise.all([
+      readGitHub(login, { ...cached, details: (owner, list, onEach) => readReposPages(owner, list, cached.raw, onEach), rooms: (own.settings && own.settings.rooms) || [] }),
+      readPage(login),
+    ]);
+    return reply({ profile: buildProfile(gh, page) }, { cdn: 21600, swr: 86400, browser: 300 });
   } catch (e) {
-    const status = e instanceof GitHubError ? e.status : 500;
-    if (status === 500) console.error('[house]', login, e);
-    return NextResponse.json({ error: e.message || 'Something went wrong while reading GitHub.' }, { status });
+    return replyError(e, 'house');
   }
-}
-
-function reply(profile, cacheable) {
-  return NextResponse.json({ profile }, {
-    headers: { 'Cache-Control': cacheable ? 'public, max-age=300, s-maxage=21600, stale-while-revalidate=86400' : 'private, no-store' },
-  });
 }

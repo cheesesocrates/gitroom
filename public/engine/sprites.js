@@ -163,13 +163,74 @@
     return c;
   }
   const SPR = {};
-  for (const id in D) {
-    const def = D[id], f = frames(def), out = {};
+  function build(id, def) {
+    const f = frames(def), out = {};
     ['stand', 'blink', 'step'].forEach(k => { out[k] = paint(def, f[k], false); out[k + 'F'] = paint(def, f[k], true); });
     let top = 0, bottom = 15;
     while (top < 16 && f.stand[top].every(c => c === '.')) top++;
     while (bottom > 0 && f.stand[bottom].every(c => c === '.')) bottom--;
     SPR[id] = { ...def, id, frames: out, top: Math.max(0, top - 1), bottom: Math.min(15, bottom + 1), pill: pill((def.tagText || def.name).toUpperCase(), def.tag, '#ffffff') };
+    return SPR[id];
+  }
+  for (const id in D) build(id, D[id]);
+
+  // ---------- placeholders: anyone without a hand-drawn sprite still moves in looking their best ----------
+  // A body shape, a hat and an accent colour are picked from the name, and the brand colour does the rest,
+  // so "Redux" always looks the same and never like "Zod".
+  const hx = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  const toHex = a => '#' + a.map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+  const mix = (a, b, t) => { const p = hx(a), q = hx(b); return toHex(p.map((v, i) => v + (q[i] - v) * t)); };
+  const lum = h => { const [r, g, b] = hx(h); return 0.299 * r + 0.587 * g + 0.114 * b; };
+  const hue = h => { const [r, g, b] = hx(h).map(v => v / 255), mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn; if (!d) return -1; const x = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; return (x * 60 + 360) % 360; };
+  const seedOf = s => { let h = 2166136261; for (const ch of s) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; } return h; };
+  // body shapes: rows 0..15, `top` is the first row of the head and [x0, x1] its width there
+  const SHAPES = [
+    { top: 3, x0: 5, x1: 10, rows: ['.....######.....', '...##########...', '..############..', '..###Ee##Ee###..', '..###ee##ee###..', '..##p##kk##p##..', '..###bbbbbb###..', '...##bbbbbb##...', '....########....', '.....ff..ff.....'] },
+    { top: 3, x0: 2, x1: 13, rows: ['..############..', '..############..', '..############..', '..##Ee####Ee##..', '..##ee####ee##..', '..#p###kk###p#..', '..############..', '..###bbbbbb###..', '..############..', '...ff......ff...'] },
+    { top: 2, x0: 5, x1: 10, rows: ['.....######.....', '....########....', '...##########...', '...##########...', '...##Ee##Ee##...', '...##ee##ee##...', '...#p##kk##p#...', '...###bbbb###...', '...###bbbb###...', '....########....', '....ff....ff....'] },
+    { top: 2, x0: 5, x1: 10, float: true, rows: ['.....######.....', '....########....', '...##########...', '..############..', '..###Ee##Ee###..', '..###ee##ee###..', '..##p##kk##p##..', '..############..', '..###bbbbbb###..', '..############..', '..#.##.##.##.#..', '...#..#..#..#...'] },
+  ];
+  // hats sit on the head: each row is [column offsets from the head's middle] drawn with a colour code
+  const HATS = [
+    null,
+    { name: 'antenna', rows: [[['a', -1, 0]], [['a', -1, 0]], [['k', 0, 0]]] },
+    { name: 'ears', ears: true },
+    { name: 'sprout', rows: [[['g', -3, -2], ['g', 1, 2]], [['g', -1, 0]]] },
+    { name: 'crown', rows: [[['y', -3, -3], ['y', -1, 0], ['y', 2, 2]], [['y', -3, 2]]] },
+    { name: 'tophat', rows: [[['a', -2, 1]], [['a', -2, 1]], [['a', -4, 3]]] },
+    { name: 'horns', horns: true },
+  ];
+  const ACCENTS = ['#ffd23f', '#ff4f8b', '#5ad8ff', '#9be15d', '#ff8a3d', '#b28bff', '#ffffff'];
+  const QUOTES = ['HELLO!', 'ON IT!', 'SHIP IT!', 'LGTM!', 'MERGED!', 'HI THERE!', 'BUSY...'];
+  const LANG_QUOTES = ['HELLO WORLD!', 'COMPILING...', 'IT RUNS!', 'NO BUGS?', 'REFACTOR!'];
+  const tagSafe = s => String(s).toUpperCase().replace(/&/g, '+').replace(/[^A-Z0-9 .,'!?%:/+\-*_=#@<>()]/g, '').replace(/\s+/g, ' ').trim().slice(0, 12) || 'NEW FRIEND';
+  function placeholderDef(id, meta) {
+    const seed = seedOf(id), color = /^#[0-9a-f]{6}$/i.test(meta.color || '') ? meta.color : toHex([90 + seed % 140, 90 + (seed >>> 8) % 140, 90 + (seed >>> 16) % 140]);
+    const shape = SHAPES[seed % SHAPES.length], hat = HATS[(seed >>> 3) % HATS.length];
+    const L = lum(color), dark = L < 45, light = L > 215;
+    const base = dark ? mix(color, '#ffffff', .2) : color;
+    const body = [mix(base, '#ffffff', .42), base, mix(base, '#000000', .26)];
+    const belly = [mix(base, '#ffffff', .75), mix(base, '#ffffff', .55), mix(base, '#ffffff', .35)];
+    const hb = hue(base), acc = ACCENTS.filter(a => hue(a) < 0 || hb < 0 || Math.min(Math.abs(hue(a) - hb), 360 - Math.abs(hue(a) - hb)) > 40);
+    const a = acc[(seed >>> 6) % acc.length];
+    const rows = Array.from({ length: 16 }, () => '................'.split(''));
+    shape.rows.forEach((r, j) => { rows[shape.top + j] = r.split(''); });
+    const mid = 8, put = (y, x, ch) => { if (y >= 0 && y < 16 && x >= 0 && x < 16 && rows[y][x] === '.') rows[y][x] = ch; };
+    if (hat && hat.rows) hat.rows.forEach((spans, j) => { const y = shape.top - hat.rows.length + j; spans.forEach(([ch, f, t]) => { for (let x = mid + f; x <= mid + t; x++) put(y, x, ch); }); });
+    if (hat && hat.ears) { const y = shape.top; [[shape.x0, 1], [shape.x1, -1]].forEach(([x, d]) => { put(y - 1, x, '#'); put(y - 1, x + d, '#'); put(y - 2, x, '#'); }); }
+    if (hat && hat.horns) { const y = shape.top; [[shape.x0 + 1, -1], [shape.x1 - 1, 1]].forEach(([x, d]) => { put(y - 1, x, 'a'); put(y - 2, x + d, 'a'); }); }
+    const tag = L > 150 ? mix(color, '#000000', .5) : dark ? mix(color, '#ffffff', .12) : color;
+    return {
+      name: meta.name || id, tagText: tagSafe(meta.tag || meta.name || id), tag, o: light ? mix(color, '#000000', .55) : mix(base, '#000000', .64), float: !!shape.float, placeholder: true, lang: !!meta.lang,
+      t: { '#': body, b: belly, a: [mix(a, '#ffffff', .45), a, mix(a, '#000000', .25)] }, f: { f: body[2], g: '#5ec23c', y: '#ffd23f' },
+      q: meta.lang ? LANG_QUOTES : [`${tagSafe(meta.tag || meta.name || id)} ♥`, ...QUOTES], rows: rows.map(r => r.join('')),
+    };
+  }
+  function placeholder(id, meta = {}) {
+    if (SPR[id]) return SPR[id];
+    const def = placeholderDef(id, meta);
+    D[id] = def;
+    return build(id, def);
   }
 
   // ---------- menu pixel bits ----------
@@ -192,5 +253,5 @@
   const LOGO = [...roof, 'o'.repeat(13), '.o' + 'c'.repeat(9) + 'o.', '.ocbbcccyyco.', '.ocbbcccyyco.', '.occccccyyco.', '.occccccyyco.', '.' + 'o'.repeat(11) + '.'];
   const LOGO_PAL = { o: '#24163b', r: '#ff4f8b', c: '#fff4dc', b: '#7fd6ff', y: '#ffc83a' };
 
-  window.PX = { INK, textWidth, drawText, canvas, pill, bubble, SPR, grassTile, grassCanvas, drawMap, LOGO, LOGO_PAL, rle, DEFS: D };
+  window.PX = { INK, textWidth, drawText, canvas, pill, bubble, SPR, grassTile, grassCanvas, drawMap, LOGO, LOGO_PAL, rle, DEFS: D, placeholder };
 })();

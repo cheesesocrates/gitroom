@@ -18,7 +18,7 @@ void main(){
   vec2 uv=(px+.5)/uR;
   vec2 tile=floor(px/16.);
   vec4 a=texture2D(uA,uv);
-  if(a.a<.5||uI<(tile.x+tile.y)*.022){gl_FragColor=vec4(1.);return;}
+  if(a.a<.5||uI<(tile.x+tile.y)*.022){gl_FragColor=vec4(0.);return;}
   vec4 lt=texture2D(uL,uv);
   vec3 L=lt.rgb*2.;
   float beam=lt.a;
@@ -85,7 +85,7 @@ void main(){
     };
   }
 
-  // 2D fallback: the unlit house on white
+  // 2D fallback: the unlit house, no lighting
   function fallback(cv) {
     const x = cv.getContext('2d');
     let house = null;
@@ -94,7 +94,7 @@ void main(){
       lost: () => false,
       setHouse(h, w, ht) { house = h; cv.width = w; cv.height = ht; x.imageSmoothingEnabled = false; },
       setLight() {},
-      frame() { x.fillStyle = '#ffffff'; x.fillRect(0, 0, cv.width, cv.height); if (house) x.drawImage(house, 0, 0); },
+      frame() { x.clearRect(0, 0, cv.width, cv.height); if (house) x.drawImage(house, 0, 0); },
     };
   }
 

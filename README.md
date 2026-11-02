@@ -1,84 +1,108 @@
-# GitRoom
+<div align="center">
 
-Type a GitHub username, get a cozy pixel-art house:
-- **Rooms:** one room per repo (the 10 most-pushed), with furniture unlocked at 1 → 1000 commits.
-- **Residents:** frameworks become 16×16 residents who walk around and use the furniture.
-- **AI helpers:** Claude, ChatGPT and Gemini visit when they show up in the code.
-- **Followers:** they cheer outside, one fan per follower (up to 3,000, with a banner showing the real number). The crowd gathers on the path in front of the house and stacks up there, then spreads round the sides; only a big crowd surrounds the house.
-- **Stars:** they float around the rooms that earned them.
+# 🏠 GitRoom
 
-Accounts with few repos (or long, famous careers) also get bonus rooms: a Lab, Hall of Fame, Observatory, Fan Lounge and more.
+**Your GitHub, as a pixel house.**
 
-## Run it
+Type any GitHub username and watch it turn into a cosy pixel-art house: repos become rooms, commits unlock furniture, your stack moves in and your followers cheer outside.
+
+### [**→ Open GitRoom**](https://gitroom-eight.vercel.app)
+
+[@karpathy](https://gitroom-eight.vercel.app/u/karpathy) · [@torvalds](https://gitroom-eight.vercel.app/u/torvalds) · [@gaearon](https://gitroom-eight.vercel.app/u/gaearon) · [@cheesesocrates](https://gitroom-eight.vercel.app/u/cheesesocrates)
+
+Free · no sign-up · no API keys · MIT
+
+<img src="docs/home.webp" alt="GitRoom home page: 'Your GitHub, as a pixel house.' next to a pixel house surrounded by cheering fans" width="900">
+
+</div>
+
+## What you get
+
+<img src="docs/house.webp" alt="@karpathy's house: ten rooms named after his repos, residents at their desks, 3,000 fans around the house and a stats sidebar" width="100%">
+
+- **Rooms.** Your busiest repos each get a room, sized by commits.
+- **Furniture.** Every room unlocks something new at 1, 2, 5, 10, 25, 50, 100, 200, 500 and 1,000 commits: rug, desk, bookshelf, plant, lamp, TV, couch, arcade, trophy.
+- **Residents.** Your stack moves in. GitRoom reads `package.json`, `requirements.txt`, `pyproject.toml`, `go.mod`, `Cargo.toml` and friends, and spots **190+ frameworks, tools and languages**. About 70 have hand-drawn sprites; the rest get a placeholder resident made from their name and brand colour, so nobody is left out.
+- **AI helpers.** Claude, ChatGPT, Gemini, Copilot and Cursor drop by when your repos use them (or keep a `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`…). They roam every room.
+- **Fans.** One cheering fan per follower, up to 3,000 on the lawn, with a red carpet and a banner showing the real number.
+- **Extras.** A contribution-graph rug, stars floating around the rooms that earned them, your achievement badges framed in the hallway, and bonus rooms (Hall of Fame, Observatory, Fan Lounge…) for small or legendary accounts.
+
+<table>
+<tr>
+<td width="62%"><img src="docs/mobile.webp" alt="GitRoom on a phone: the home page and a house page"></td>
+<td><img src="docs/share-story.webp" alt="A 1080 by 1920 story image of @cheesesocrates' house with stats, languages, badges and residents"></td>
+</tr>
+<tr>
+<td>Works great on phones: pinch to zoom, tap a room or a resident.</td>
+<td>Share a story, square or wide image, or a 15-second MP4.</td>
+</tr>
+</table>
+
+## Share your house
+
+Press **Share** on any house to make a picture (story 9:16, square, or a 2560 × 1440 wallpaper) or a **15-second video** of the house in motion. Videos are rendered frame by frame with WebCodecs, so they're ready in seconds, and saved as MP4. Every house link also gets its own social preview card.
+
+<img src="docs/share-wide.webp" alt="Wide share image of @cheesesocrates' house with a stats card" width="100%">
+
+## Make it yours (no password, no OAuth)
+
+Visitors can only look around. To change your own house, press **Connect GitHub** and commit one small file to your profile repo (`<you>/<you>/.gitroom/…json`). GitRoom opens GitHub's own "new file" page with it already filled in; you press **Commit changes**.
+
+Only you can push to your profile repo, so GitHub itself proves the house is yours. GitRoom never asks for a password or a token and never writes to your account. Once connected, you can:
+
+- pick which repos get rooms, and turn bonus rooms on or off
+- remove residents the detector got wrong, or add missing ones
+- shuffle the floor plan until you like it
+- rename the house, and pick the wallpaper, pet and lighting
+
+Edits show up instantly in your browser. **Publish** commits a new house file, and every visitor sees it within a minute.
+
+## How it works: zero keys
+
+GitRoom runs without a single API key, token, OAuth app or database:
+
+1. **Three API calls per house.** The user, their repos and their house file come from GitHub's public REST API, which needs no token.
+2. **Public pages for the rest.** Commit counts and file lists come from each repo's public web page, and manifests from `raw.githubusercontent.com`. The contribution graph and badges come from the public profile. None of these touch the API quota.
+3. **Cached at the edge.** The server builds each house and Vercel's CDN keeps it for six hours, so a popular house costs GitHub one read.
+4. **Graceful fallback.** If the server has used up GitHub's free quota, your browser makes those three calls itself. Featured houses ship as snapshots, and rate limits show a friendly "try again in N minutes".
+
+## Run it yourself
 
 ```bash
+git clone https://github.com/cheesesocrates/gitroom
+cd gitroom
 npm install
 npm run dev        # http://localhost:3000
 ```
 
-In development no setup is needed if the GitHub CLI is signed in (`gh auth login`): GitRoom borrows its token for public data. Otherwise copy `.env.example` to `.env.local` and set `GITHUB_TOKEN`.
+There are no environment variables to set. To deploy, import the repo on [Vercel](https://vercel.com/new) and press Deploy.
 
-## Pages
+## Under the hood
 
-- `/`: the landing page and username form.
-- `/u/<login>`: the house.
-  - Scroll or pinch to zoom as far as you like, and drag to look around.
-  - **Share** makes story (9:16), square and desktop (16:9) images, or a 15-second video of the house in motion (MP4 where the browser supports it, otherwise WebM). The video is rendered frame by frame with WebCodecs, so it is ready in seconds; browsers without WebCodecs film it live for 15 seconds instead. You can pick the background, the lighting and which details are shown, and add a caption. In pictures and videos the fans pack the front of the frame as an audience.
-- `/avatars`: the whole cast.
-  - In development, mark sprites "Needs remake" with a note; marks save to `data/avatar-flags.json`.
-  - In production it is a read-only gallery.
+| Path | What it does |
+| --- | --- |
+| `lib/github-rest.js` | Reads a person from GitHub's public API (works on the server and in the browser) |
+| `lib/repo-page.js` | Commit counts and files from public repo pages |
+| `lib/page.js` | Contribution calendar and achievements from the public profile |
+| `lib/detect.js` | Which resident moves in for which dependency or file (190+ rules) |
+| `lib/analyze.js` | Turns GitHub data into the house profile |
+| `lib/settings.js` | The house file format, checked strictly (it comes from someone else's repo) |
+| `lib/client.js` | Browser side: caching, fallbacks, connect and publish |
+| `app/api/*` | `house`, `repos`, `page` and `settings` routes, all CDN-cached |
+| `public/engine/` | The pixel engine: sprites, floor plans, furniture, a WebGL lighting shader, share images and video |
 
-## Signing in and editing your house
+Built with Next.js 16, plain canvas and WebGL, GSAP for motion and Mediabunny for MP4 encoding.
 
-The owner of a house can sign in with GitHub and fix it up for everyone:
-- pick which repos get rooms
-- turn bonus rooms on or off
-- remove residents the detector got wrong, or add missing ones
-- keep a floor plan they like
-- set the name, wallpaper, pet and lighting
+<img src="docs/cast.webp" alt="The cast page showing placeholder residents like Actix, Alpine.js, Android and Ansible" width="100%">
 
-Visitors can still play with Customize, but their changes stay in their own browser.
+## Credits
 
-- **Development:** with no OAuth App configured, "Sign in with GitHub" on `localhost` signs you in as the GitHub CLI account. The token stays on the server. This only works from `localhost`.
-- **Production:** create a GitHub OAuth App with callback `https://<your-domain>/api/auth/callback`, then set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and `SESSION_SECRET`.
-  - Plain sign-in asks only for `read:user`.
-  - Private repos are a separate opt-in (`repo` scope). They are shown only to their owner, never by name (Priv1, Priv2…), and never cached.
-
-Saved house settings go to `data/houses/<login>.json`. On serverless hosts, set `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` to keep them in Upstash Redis instead.
-
-## Deploy to Vercel
-
-1. Import the repo at [vercel.com/new](https://vercel.com/new). It builds with the defaults.
-2. Add these environment variables, then redeploy:
-   - `GITHUB_TOKEN`: a classic personal access token with **no scopes** ([create one](https://github.com/settings/tokens/new?description=GitRoom&scopes=)). It can only read public data. Don't reuse your `gh` CLI token, which can read your private repos.
-   - `SESSION_SECRET`: any long random string, for example from `openssl rand -base64 32`.
-   - Optional, for "Sign in with GitHub": `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` from a GitHub OAuth App whose callback URL is `https://<your-domain>/api/auth/callback`.
-   - Optional, so owners can save their houses: add Upstash Redis from the Vercel Marketplace. Its `KV_REST_API_URL` and `KV_REST_API_TOKEN` are picked up automatically.
-
-## How it fits together
-
-- `lib/github.js`: GraphQL calls for the user, repos and contribution calendar, plus manifests of the busiest repos.
-  - Commits are counted per repo, busiest first, stopping once the top ten are settled.
-  - Giant repos (like `torvalds/linux`) are counted through commit search, because GraphQL times out on them.
-  - Achievements come from the profile page.
-- `lib/detect.js`: which resident moves in for which dependency or file.
-- `lib/analyze.js`: builds the profile the engine draws.
-- `lib/settings.js`, `lib/store.js`: what owners can change, and where it's saved.
-- `app/api/house/[login]`: cached 6 h in memory and at the CDN for public houses.
-- `public/engine/`: the pixel engine as plain browser scripts.
-  - `sprites.js` and `avatars-a/b/c/d.js`: the cast.
-  - `layout.js`: the floor plan, furniture placement and bonus rooms.
-  - `furniture.js`: the furniture painters.
-  - `render.js`: the WebGL lighting shader.
-  - `house.js`, `landing.js`: the two pages.
-
-## Third-party code and fonts
-
-- `public/vendor/gsap.min.js`: [GSAP](https://gsap.com) 3.12.5, under GreenSock's standard license.
-- `public/vendor/mediabunny.min.mjs`: [Mediabunny](https://mediabunny.dev) 1.61.4 for video encoding, MPL-2.0 (license alongside it).
-- `public/fonts/tiny5-digits.woff2`: the digits of [Tiny5](https://github.com/Gissio/font_tiny5), SIL OFL 1.1 (license alongside it). The pixel font is Pixelify Sans, which draws 5 like an S, so its digits come from Tiny5.
-- Bricolage Grotesque, Figtree and Pixelify Sans come from Google Fonts through `next/font`, all SIL OFL 1.1.
+- [GSAP](https://gsap.com) 3.12.5 (`public/vendor/gsap.min.js`), under GreenSock's standard license.
+- [Mediabunny](https://mediabunny.dev) 1.61.4 (`public/vendor/mediabunny.min.mjs`), MPL-2.0, license alongside it.
+- [Tiny5](https://github.com/Gissio/font_tiny5) digits (`public/fonts/`), SIL OFL 1.1.
+- Bricolage Grotesque, Figtree and Pixelify Sans (Google Fonts, and as WOFF files in `assets/fonts/` for the social cards), all SIL OFL 1.1.
+- GitRoom isn't affiliated with GitHub. It only reads public data.
 
 ## License
 
-GitRoom is MIT licensed (see `LICENSE`). The vendored libraries and fonts above keep their own licenses.
+MIT, see [`LICENSE`](LICENSE). The vendored libraries and fonts keep their own licenses.

@@ -4,10 +4,11 @@ import { loadEngine } from '@/app/components/Engine';
 
 // Floors to judge the sprites on: the house's wood and wallpaper tones, plus the white outside.
 const FLOORS = { wood: ['#f3d9b1', '#e9c896'], seafoam: ['#5fe0cb', '#1fb5a1'], midnight: ['#4a5cb0', '#2b3a7a'], white: ['#ffffff', '#f2f2f2'] };
-const KINDS = { framework: 'Stack', ai: 'AI helper', pet: 'Pet', visitor: 'Visitor' };
-const FILTERS = [['all', 'All'], ['framework', 'Stack'], ['ai', 'AI helpers'], ['pet', 'Pets'], ['visitor', 'Visitors'], ['flagged', 'Marked']];
+const KINDS = { framework: 'Hand-drawn', placeholder: 'Placeholder', language: 'Language', ai: 'AI helper', pet: 'Pet', visitor: 'Visitor' };
+const FILTERS = [['all', 'All'], ['framework', 'Hand-drawn'], ['placeholder', 'Placeholders'], ['language', 'Languages'], ['ai', 'AI helpers'], ['pet', 'Pets'], ['visitor', 'Fans']];
+const ORDER = { framework: 0, ai: 1, placeholder: 2, language: 3, pet: 4, visitor: 5 };
 
-export default function AvatarBoard({ rules, initialFlags, canSave }) {
+export default function AvatarBoard({ rules, extras, langs, initialFlags, canSave }) {
   const [cast, setCast] = useState(null);
   const [failed, setFailed] = useState('');
   const [flags, setFlags] = useState(initialFlags);
@@ -16,21 +17,27 @@ export default function AvatarBoard({ rules, initialFlags, canSave }) {
   const [motion, setMotion] = useState('walk');
   const [status, setStatus] = useState('');
   const views = useRef(new Map());
+  const logo = useRef(null);
 
   useEffect(() => {
     loadEngine('avatars').then(() => {
-      document.documentElement.style.setProperty('--grass-day', `url(${window.PX.grassTile(false)})`);
-      document.documentElement.style.setProperty('--grass-night', `url(${window.PX.grassTile(true)})`);
-      const S = window.PX.SPR, order = { framework: 0, ai: 1, pet: 2, visitor: 3 };
-      const list = Object.keys(S).map(id => ({
-        id, name: S[id].name, quotes: S[id].q || [],
-        kind: S[id].pet ? 'pet' : S[id].npc ? 'visitor' : rules[id] && rules[id].ai ? 'ai' : 'framework',
-        how: S[id].pet ? ['bought with commit days in Customize'] : S[id].npc ? ['drops by when the account has followers (one per doubling, up to six)'] : rules[id] ? rules[id].how : ['no detection rule yet'],
-      }));
-      list.sort((a, b) => order[a.kind] - order[b.kind] || a.name.localeCompare(b.name));
+      const PX = window.PX;
+      document.documentElement.style.setProperty('--grass-day', `url(${PX.grassTile(false)})`);
+      document.documentElement.style.setProperty('--grass-night', `url(${PX.grassTile(true)})`);
+      if (logo.current) PX.drawMap(logo.current, PX.LOGO, PX.LOGO_PAL);
+      [...extras, ...langs].forEach(m => PX.placeholder(m.id, m));
+      const S = PX.SPR;
+      const list = Object.keys(S).map(id => {
+        const s = S[id];
+        const kind = s.pet ? 'pet' : s.npc ? 'visitor' : s.lang ? 'language' : rules[id] && rules[id].ai ? 'ai' : s.placeholder ? 'placeholder' : 'framework';
+        const how = s.pet ? ['picked by the owner in Edit house'] : s.npc ? ['one cheering fan per follower, outside the house']
+          : s.lang ? [`a repo written in ${s.name} that nothing else lives in`] : rules[id] ? rules[id].how : ['no detection rule yet'];
+        return { id, name: s.name, quotes: s.q || [], kind, how };
+      });
+      list.sort((a, b) => ORDER[a.kind] - ORDER[b.kind] || a.name.localeCompare(b.name));
       setCast(list);
     }).catch(e => setFailed(e.message));
-  }, [rules]);
+  }, [rules, extras, langs]);
 
   // one loop animates every canvas on the page
   useEffect(() => {
@@ -102,16 +109,20 @@ export default function AvatarBoard({ rules, initialFlags, canSave }) {
     try { localStorage.setItem('gitroom-theme', el.dataset.theme); } catch (e) { /* private mode */ }
   }
 
+  const filters = canSave ? [...FILTERS, ['flagged', 'Marked']] : FILTERS;
   const shown = (cast || []).filter(c => filter === 'all' || (filter === 'flagged' ? flaggedIds.includes(c.id) : c.kind === filter));
-  const counts = cast ? { framework: cast.filter(c => c.kind === 'framework').length, ai: cast.filter(c => c.kind === 'ai').length, pet: cast.filter(c => c.kind === 'pet').length, visitor: cast.filter(c => c.kind === 'visitor').length } : null;
+  const count = k => (cast || []).filter(c => c.kind === k).length;
 
   return (
     <div className="cast-page grass">
       <header className="topbar">
-        <a className="logo" href="/" aria-label="GitRoom home"><span className="logo-word">GitRoom</span></a>
+        <a className="logo" href="/" aria-label="GitRoom home">
+          <canvas className="px logo-mark" ref={logo} width="13" height="13" aria-hidden="true" />
+          <span className="logo-word">GitRoom</span>
+        </a>
         <div className="top-actions">
-          <a className="btn" href="/"><span aria-hidden="true">←</span><span className="pixel">Build a house</span></a>
-          <button className="btn theme-btn" type="button" onClick={toggleTheme} aria-label="Switch day or night colours">
+          <a className="btn" href="/"><span aria-hidden="true">←</span><span>Build a house</span></a>
+          <button className="btn icon theme-btn" type="button" onClick={toggleTheme} aria-label="Switch day or night colours">
             <span className="sun" aria-hidden="true">☀</span><span className="moon" aria-hidden="true">☾</span>
           </button>
         </div>
@@ -119,12 +130,14 @@ export default function AvatarBoard({ rules, initialFlags, canSave }) {
       <section className="plaque cast-head">
         <h1>The cast</h1>
         <p>
-          Every resident that can move into a GitRoom house, all 16 × 16 pixels, and how GitRoom spots them in a repo.
+          Everyone who can move into a GitRoom house, all 16 × 16 pixels, and how GitRoom spots them in a repo. Frameworks without a
+          hand-drawn sprite still move in as placeholders made from their name and brand colour, and a repo that nothing else lives in
+          gets a creature for its language.
           {canSave ? ' Mark any that need redrawing and say what to change. Marks save to data/avatar-flags.json.' : ''}
         </p>
         <div className="cast-tools">
           <div className="seg" role="group" aria-label="Show">
-            {FILTERS.map(([k, label]) => (
+            {filters.map(([k, label]) => (
               <button key={k} type="button" aria-pressed={filter === k} onClick={() => setFilter(k)}>
                 {label}{k === 'flagged' ? ` (${flaggedIds.length})` : ''}
               </button>
@@ -139,7 +152,7 @@ export default function AvatarBoard({ rules, initialFlags, canSave }) {
           </div>
         </div>
         <div className="cast-summary" aria-live="polite">
-          {counts && <span>{cast.length} residents: {counts.framework} frameworks and tools, {counts.ai} AI helpers, {counts.pet} pets, {counts.visitor} visitors.</span>}
+          {cast && <span>{cast.length} residents: {count('framework')} hand-drawn, {count('ai')} AI helpers, {count('placeholder')} placeholders, {count('language')} languages, {count('pet')} pets and {count('visitor')} kinds of fan.</span>}
           {canSave && <span><b>{flaggedIds.length}</b> marked for a remake.</span>}
           {canSave && flaggedIds.length > 0 && <button className="chipbtn" type="button" onClick={copyList}>Copy list</button>}
           {status && <span>{status}</span>}
@@ -167,7 +180,7 @@ export default function AvatarBoard({ rules, initialFlags, canSave }) {
                 </div>
               </div>
               <ul className="cast-how">{c.how.map(h => <li key={h}>{h}</li>)}</ul>
-              <div className="cast-quotes">{c.quotes.map(q => <span key={q}>{q}</span>)}</div>
+              <div className="cast-quotes">{c.quotes.slice(0, 3).map(q => <span key={q}>{q}</span>)}</div>
               {canSave && (
                 <div className="cast-flag">
                   <button className="btn" type="button" aria-pressed={!!flag} onClick={() => save(c.id, !flag, '')}>

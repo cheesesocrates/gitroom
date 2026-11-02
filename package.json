@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
-  "description": "Turn a GitHub profile into a cozy pixel-art house.",
+  "description": "Your GitHub, as a pixel house: repos become rooms, commits unlock furniture, your stack moves in and followers cheer outside. No API keys.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -13,8 +13,13 @@
   "dependencies": {
     "gsap": "3.12.5",
     "mediabunny": "1.61.4",
-    "next": "16.4.0",
+    "next": "16.4.4",
     "react": "19.3.0",
     "react-dom": "19.3.0"
+  },
+  "homepage": "https://gitroom-eight.vercel.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cheesesocrates/gitroom"
   }
 }

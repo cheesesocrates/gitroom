@@ -50,14 +50,24 @@
   }
 
   // ---------- model ----------
-  let profile = null, viewer = {}, owner = false, settings = null, mode = 'public', rooms = [], residents = [], fans = [], custom = null, stats = null;
+  // published: the owner's newest house file on GitHub · settings: what the house shows (published, plus the owner's unpublished edits)
+  let profile = null, owner = false, published = null, pubBranch = null, settings = null, rooms = [], residents = [], fans = [], custom = null, stats = null, login = '', attic = 0;
   const GAME = ['C++', 'C#', 'GDScript', 'GDShader', 'Lua'];
-  const DATAFW = ['pytorch', 'tensorflow', 'sklearn', 'pandas', 'numpy', 'matplotlib', 'jupyter', 'opencv', 'mediapipe', 'huggingface', 'langchain', 'llamaindex', 'pinecone'];
-  const GAMEFW = ['sdl', 'pygame', 'godot', 'unity', 'bevy', 'three'];
+  const DATAFW = ['pytorch', 'tensorflow', 'sklearn', 'pandas', 'numpy', 'matplotlib', 'jupyter', 'opencv', 'mediapipe', 'huggingface', 'langchain', 'llamaindex', 'pinecone', 'jax', 'scipy', 'xgboost', 'spark', 'ray', 'mlflow', 'wandb', 'yolo', 'onnx', 'spacy', 'nltk'];
+  const GAMEFW = ['sdl', 'pygame', 'godot', 'unity', 'bevy', 'three', 'phaser', 'pixi', 'babylon', 'ebiten', 'macroquad', 'libgdx', 'minecraft'];
   const themeOf = r => GAME.includes(r.main) || r.fw.some(f => GAMEFW.includes(f)) ? 'game' : r.fw.some(f => DATAFW.includes(f)) ? 'data' : ['Rust', 'Go', 'C', 'Shell', 'Makefile'].includes(r.main) ? 'sys' : 'web';
   const tierName = (i, theme) => (THEME_NAMES[theme] && THEME_NAMES[theme][i]) || TIER_NAMES[i];
-  const visible = () => profile.repos.filter(r => mode === 'all' || !r.private);
-  const byCommits = (a, b) => b.commits - a.commits || (b.pushed > a.pushed ? 1 : -1);
+  const visible = () => profile.repos;
+  const byCommits = (a, b) => (b.commits || 0) - (a.commits || 0) || (b.pushed > a.pushed ? 1 : -1);
+  const isAI = id => AI_IDS.includes(id) || !!(profile && profile.cast[id] && profile.cast[id].ai);
+  // residents without a hand-drawn sprite get a placeholder made from their name and colour
+  function castPlaceholders() {
+    Object.entries(profile.cast || {}).forEach(([id, meta]) => { if (!SPR[id]) window.PX.placeholder(id, meta); });
+    if (settings && settings.fixes) Object.values(settings.fixes).forEach(f => (f.add || []).forEach(id => {
+      const meta = !SPR[id] && window.GitRoomData.castMeta(id);
+      if (meta) { window.PX.placeholder(id, meta); profile.cast[id] = meta; }
+    }));
+  }
   function statsOf() {
     const reps = visible();
     return { years: Math.max(0, new Date().getFullYear() - profile.cal.since), stars: reps.reduce((a, r) => a + (r.stars || 0), 0), followers: profile.followers || 0, days: profile.cal.days || 0, badges: profile.badges.length, repos: reps.length };
@@ -65,9 +75,9 @@
   // a repo's residents after the owner's fixes
   function fixedCast(r) {
     const f = settings && settings.fixes && settings.fixes[r.id];
-    if (!f) return { fw: r.fw, ai: r.ai };
+    if (!f) return { fw: r.fw.filter(id => SPR[id]), ai: r.ai.filter(id => SPR[id]) };
     const all = [...new Set([...r.fw, ...r.ai, ...(f.add || [])])].filter(id => !(f.remove || []).includes(id) && SPR[id]);
-    return { fw: all.filter(id => !AI_IDS.includes(id)), ai: all.filter(id => AI_IDS.includes(id)) };
+    return { fw: all.filter(id => !isAI(id)), ai: all.filter(isAI) };
   }
   function pickRepos() {
     const vis = visible();
@@ -75,15 +85,13 @@
       const chosen = vis.filter(r => settings.rooms.includes(r.id));
       if (chosen.length) return chosen.sort(byCommits).slice(0, 10);
     }
-    return vis.slice().sort(byCommits).slice(0, 10);
+    return vis.filter(r => r.detailed).sort(byCommits).slice(0, 10);
   }
   function buildModel() {
     stats = statsOf();
-    let pn = 0;
     rooms = pickRepos().map((r, i) => {
-      // private repos never show their names: they're Priv1, Priv2… in the house and in shared images
-      const priv = r.private ? `Priv${++pn}` : null, cast = fixedCast(r), repo = { ...r, fw: cast.fw, ai: cast.ai };
-      return { key: 'r' + i, repo, label: priv || r.name, sign: priv ? `§ ${priv.toUpperCase()}` : (r.name.length > 16 ? r.name.slice(0, 14) + '..' : r.name).toUpperCase(), color: r.color, fg: r.fg, weight: r.commits, sizeKB: r.sizeKB, tiers: TIERS.filter(t => r.commits >= t).length, theme: themeOf(repo) };
+      const cast = fixedCast(r), repo = { ...r, commits: r.commits || 0, fw: cast.fw, ai: cast.ai }, n = repo.commits;
+      return { key: 'r' + i, repo, label: r.name, sign: (r.name.length > 16 ? r.name.slice(0, 14) + '..' : r.name).toUpperCase(), color: r.color, fg: r.fg, weight: n, sizeKB: r.sizeKB, tiers: TIERS.filter(t => n >= t).length, theme: themeOf(repo) };
     });
     const ws = rooms.map(r => r.weight).sort((a, b) => a - b), mid = ws.length ? ws[Math.floor(ws.length / 2)] : 8;
     const bonus = settings && Array.isArray(settings.bonus) ? settings.bonus.filter(id => BONUS[id]).slice(0, 12 - rooms.length) : autoBonus(rooms.length, stats);
@@ -94,31 +102,51 @@
       if (!map.has(id)) map.set(id, { id, ai: rm.repo.ai.includes(id), homes: [] });
       map.get(id).homes.push(rm.key);
     }));
-    residents = [...map.values()].map(r => ({ ...r, home: r.ai ? 'hall' : r.homes[0] }));
+    // Six residents per room at most, so a busy repo doesn't turn into a wall of name tags: hand-drawn sprites move in
+    // first, then placeholders, then language creatures. Someone with no space left tries their next room.
+    const rank = id => (SPR[id].lang ? 2 : SPR[id].placeholder ? 1 : 0), load = {}, ROOM_CAP = 6, AI_CAP = 5;
+    let aiN = 0;
+    residents = [];
+    [...map.values()].sort((a, b) => rank(a.id) - rank(b.id)).forEach(r => {
+      if (r.ai) { if (aiN++ < AI_CAP) residents.push({ ...r, home: 'hall' }); return; }
+      const home = r.homes.find(k => (load[k] || 0) < ROOM_CAP);
+      if (home) { load[home] = (load[home] || 0) + 1; residents.push({ ...r, home }); }
+    });
+    attic = map.size - residents.length;
     // fans don't come inside: they're the crowd cheering out on the lawn (see buildCrowd)
     fans = [];
   }
   const roomByKey = k => rooms.find(r => r.key === k);
   const roomLabel = k => k === 'hall' ? 'the hallways' : (roomByKey(k) ? roomByKey(k).label : k);
 
-  // ---------- look: the owner's saved choices, plus (for visitors) whatever they tried in this browser ----------
+  // ---------- look: the owner's choices (only the owner can change them, and only from a connected browser) ----------
   const cdays = () => profile.cal.days || 0;
   const unlocked = d => cdays() >= d;
-  const customKey = () => 'gitroom-custom-' + profile.handle.toLowerCase();
   const LOOK = ['name', 'paper', 'pet', 'light', 'tags'];
   function loadCustom() {
     const saved = {};
     if (settings) LOOK.forEach(k => { if (settings[k] !== undefined) saved[k] = settings[k]; });
-    let local = {};
-    if (!owner) { try { local = JSON.parse(store.get(customKey()) || '{}'); } catch (e) { local = {}; } }
-    custom = { name: profile.house, paper: 'teal', pet: 'cat', light: 'auto', tags: true, ...saved, ...local };
+    custom = { name: profile.house, paper: 'teal', pet: 'cat', light: 'auto', tags: true, ...saved };
     if (!unlocked((WALLPAPERS.find(w => w.id === custom.paper) || { days: 1e9 }).days)) custom.paper = 'teal';
     if (!unlocked((PETS.find(p => p.id === custom.pet) || { days: 1e9 }).days)) custom.pet = 'cat';
   }
+  // the owner's edits so far, as house-file settings
+  function currentSettings() {
+    const s = { ...(settings || {}) };
+    LOOK.forEach(k => { s[k] = custom[k]; });
+    if (s.name === profile.house) delete s.name;
+    if (Number.isInteger(shuffle) && shuffle > 0) s.layout = shuffle; else delete s.layout;
+    if (published && published.keys) s.keys = published.keys;
+    return window.GitRoomData.cleanSettings(s);
+  }
+  const same = (a, b) => JSON.stringify(window.GitRoomData.cleanSettings(a || {})) === JSON.stringify(window.GitRoomData.cleanSettings(b || {}));
   let dirty = false;
   function saveCustom() {
-    if (owner) { dirty = true; markDirty(); return; }
-    store.set(customKey(), JSON.stringify(custom));
+    if (!owner) return;
+    settings = currentSettings();
+    dirty = !same(settings, published);
+    window.GitRoomData.setDraft(login, dirty ? settings : null);
+    markDirty();
   }
   const paper = () => (WALLPAPERS.find(w => w.id === custom.paper) || WALLPAPERS[0]).c;
   function lightMode() { if (custom.light !== 'auto') return custom.light; const h = new Date().getHours(); return h >= 6 && h < 17 ? 'day' : h >= 17 && h < 20 ? 'sunset' : 'night'; }
@@ -137,7 +165,7 @@
   function relight() { if (!P) return; lastMode = lightMode(); const maps = mapsFor(lastMode); lightBuf = maps.light; R.setLight(maps); walkers.forEach(w => { w.tintT = 0; }); }
   function makeHouse(intro) {
     let next = null, list = rooms;
-    const seed = profile.seed + shuffle * 1013 + (mode === 'all' ? 77 : 0);
+    const seed = profile.seed + shuffle * 1013;
     for (;;) {
       for (let k = 0; k < 8 && !next; k++) next = window.LAYOUT.plan(list, profile.badges.length, seed + k * 31337, profile.cal, { pad: crowdPad(crowdSize()), below: crowdBelow(crowdSize()) });
       const last = list.map(r => !!r.special).lastIndexOf(true);
@@ -688,7 +716,7 @@
   // ---------- side panel + header ----------
   function statsNow() {
     const s = stats || statsOf();
-    return [[s.repos, mode === 'all' ? 'Repos' : 'Public repos'], [s.stars, 'Stars', s.stars >= 10000 ? 'k' : ''], [s.days, 'Commit days'], [s.followers, 'Followers', s.followers >= 10000 ? 'k' : '']];
+    return [[s.repos, 'Repos'], [s.stars, 'Stars', s.stars >= 10000 ? 'k' : ''], [s.days, 'Commit days'], [s.followers, 'Followers', s.followers >= 10000 ? 'k' : '']];
   }
   function identicon(x) {
     let h = 2166136261;
@@ -697,36 +725,31 @@
     for (let y = 0; y < 5; y++) for (let i = 0; i < 3; i++) if ((h >> (y * 3 + i + 2)) & 1) { x.fillRect(i * 2, y * 2, 2, 2); x.fillRect((4 - i) * 2, y * 2, 2, 2); }
   }
   function drawAvatar() {
-    // your GitHub picture, squashed to 10 x 10 so it matches the pixel art; the identicon stays if it can't load
-    const cv = $('#identicon'), x = cv.getContext('2d');
-    identicon(x);
-    const img = new Image();
-    img.onload = () => { x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high'; x.clearRect(0, 0, 10, 10); x.drawImage(img, 0, 0, 10, 10); };
-    img.src = `https://avatars.githubusercontent.com/${encodeURIComponent(profile.handle)}?size=40`;
+    // the GitHub picture; a pixel identicon holds its place (and stays if the picture can't load)
+    identicon($('#identicon').getContext('2d'));
+    const img = $('#avatar');
+    img.onload = () => { img.hidden = false; };
+    img.onerror = () => { img.hidden = true; };
+    img.src = `https://avatars.githubusercontent.com/${encodeURIComponent(profile.handle)}?size=112`;
   }
-  function ownerNote() {
-    const el = $('#owner-note'), nPriv = profile.repos.filter(r => r.private).length;
-    let html = '';
-    if (profile.reauth) html = `Your GitHub sign-in expired. <a href="/api/auth/login">Sign in again</a> to edit your house.`;
-    else if (owner && viewer.private && !nPriv) html = `This is your house: press <b>Edit house</b> to change it for everyone. No private repos found. <a href="/api/auth/logout">Sign out</a>`;
-    else if (owner && !nPriv) html = `This is your house: press <b>Edit house</b> to change it for everyone. Private repos can move in too, shown only to you and never by name. <a href="/api/auth/login?private=1">Add private repos</a> · <a href="/api/auth/logout">Sign out</a>`;
-    else if (owner) html = `This is your house: press <b>Edit house</b> to change it for everyone. Only you see private rooms, and never by name. <a href="/api/auth/logout">Sign out</a>`;
-    else if (viewer.login) html = `Signed in as @${esc(viewer.login)}. <a href="/u/${encodeURIComponent(viewer.login)}">Open your house</a>`;
-    else if (viewer.configured) html = `Is this your house? <a href="/api/auth/login">Sign in with GitHub</a> to fix it up for everyone.`;
-    el.innerHTML = html;
-    el.hidden = !html;
+  // who sees what: visitors get "Is this your house?", the connected owner gets the editor
+  function ownerUI() {
+    document.body.classList.toggle('is-owner', owner);
+    document.querySelectorAll('.owner-only').forEach(el => { el.hidden = !owner; });
+    document.querySelectorAll('.visitor-only').forEach(el => { el.hidden = owner; });
+    $('#owner-chip').hidden = !owner;
+    $('#publish-btn').hidden = !(owner && dirty);
+    $('#pub-state').textContent = owner ? (dirty ? 'Unpublished changes' : published && published.keys ? 'Published' : '') : '';
+    $('#owner-text').textContent = dirty
+      ? 'You have changes only you can see. Publish them to GitHub so every visitor sees them too.'
+      : "You're connected from this browser. Edit your house any time; publish to show your changes to everyone.";
   }
   function fillProfile() {
     $('#handle').textContent = '@' + profile.handle;
     $('#chip').textContent = profile.chip;
     $('#sub').textContent = profile.sub;
     $('#stats').innerHTML = statsNow().map(([v, l, f]) => `<div class="stat"><b data-count="${v}" data-fmt="${f || ''}">${fmt(v, f)}</b><span>${esc(l)}</span></div>`).join('');
-    const nPriv = profile.repos.filter(r => r.private).length;
-    $('#vis').hidden = !nPriv;
-    $('#vis-all').textContent = `+ Private (${nPriv})`;
-    document.querySelectorAll('[data-vis]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.vis === mode)));
-    ownerNote();
-    $('#custom-btn .pixel').textContent = owner ? 'Edit house' : 'Customize';
+    ownerUI();
     const repoRooms = rooms.filter(r => r.repo), tot = repoRooms.reduce((a, r) => a + r.weight, 0) || 1, mix = {}, COL = {};
     repoRooms.forEach(rm => rm.repo.langs.forEach(([l, p]) => { mix[l] = (mix[l] || 0) + p * rm.weight / tot; }));
     profile.repos.forEach(r => { COL[r.main] = r.color; });
@@ -736,8 +759,9 @@
     $('#langkey').innerHTML = langs.slice(0, 4).map(([l, p]) => `<span><i style="background:${esc(COL[l] || '#b9aecb')}"></i>${esc(l)} ${Math.round(p)}%</span>`).join('');
     $('#room-list').innerHTML = repoRooms.map(rm => {
       const r = rm.repo, next = TIERS[rm.tiers];
-      return `<li><button type="button" data-zoom="${rm.key}" title="${esc(next ? `Next: ${tierName(rm.tiers, rm.theme)} at ${next} commits` : 'Fully furnished')}"><span class="sw" style="background:${esc(r.color)}"></span><span class="nm">${r.private ? '<span class="lock" aria-hidden="true"></span>' : ''}${esc(rm.label)}<small>${esc(r.main)} · ${rm.tiers}/10 items${r.stars ? ` · ★&nbsp;${short(r.stars)}` : ''}</small><span class="bar"><i style="width:${rm.tiers * 10}%"></i></span></span><span class="pc">${short(r.commits)}<small>commits</small></span></button></li>`;
+      return `<li><button type="button" data-zoom="${rm.key}" title="${esc(next ? `Next: ${tierName(rm.tiers, rm.theme)} at ${next} commits` : 'Fully furnished')}"><span class="sw" style="background:${esc(r.color)}"></span><span class="nm">${esc(rm.label)}<small>${esc(r.main)} · ${rm.tiers}/10 items${r.stars ? ` · ★&nbsp;${short(r.stars)}` : ''}</small><span class="bar"><i style="width:${rm.tiers * 10}%"></i></span></span><span class="pc">${short(r.commits)}<small>commits</small></span></button></li>`;
     }).join('') || '<li class="empty">No public repos with commits yet, so the bonus rooms are holding the fort.</li>';
+    $('#room-note').textContent = repoRooms.length ? `${repoRooms.length} by commits` : '';
     const bonus = rooms.filter(r => r.special);
     $('#bonus-list').innerHTML = bonus.map(rm => `<button type="button" class="bonus" data-zoom="${rm.key}" title="${esc(BONUS[rm.special].why(stats))}"><span class="sw" style="background:${rm.color}"></span>${esc(rm.label)}</button>`).join('');
     $('#bonus-wrap').hidden = !bonus.length;
@@ -761,14 +785,9 @@
       b.append(cv, s); list.appendChild(b);
     }
     if (!residents.length) list.insertAdjacentHTML('beforeend', '<p class="ai-note">No frameworks spotted yet. Residents move in when repos use them.</p>');
+    if (attic > 0) list.insertAdjacentHTML('beforeend', `<p class="ai-note">+${attic} more ${attic === 1 ? 'resident is' : 'residents are'} waiting for a free room.</p>`);
     $('#res-count').textContent = residents.length || '';
     drawAvatar();
-  }
-  function setMode(next) {
-    if (mode === next) return;
-    mode = next;
-    buildModel(); fillProfile(); makeHouse(true);
-    toast(mode === 'all' ? 'Private repos moved in. They go by Priv1, Priv2 and so on.' : 'Showing public repos only.');
   }
 
   // ---------- camera: tap a room, or zoom as far as you like ----------
@@ -892,10 +911,10 @@
     if (!h) return null;
     if (h.kind === 'res') {
       const r = h.w.res, doing = h.w.state === 'use' ? ` Right now: ${DOING[h.w.task.u.act]} ${NICE[h.w.task.it.kind] || h.w.task.it.kind}.` : '';
-      if (r.pet) return [h.w.s.name, 'Your pet', 'Goes wherever it likes. Pick a different pet in Customize.' + doing];
+      if (r.pet) return [h.w.s.name, `@${profile.handle}'s pet`, 'Goes wherever it likes.' + (owner ? ' Pick a different pet in Edit house.' : '') + doing];
       if (r.fan) return ['A fan', `One of ${fmtN(stats.followers)} followers`, `Fans drop by to hang out. More followers, more fans (up to six).${doing}`];
-      const uniq = [...new Set(r.homes.map(roomLabel))];
-      return [h.w.s.name, r.ai ? 'AI visitor · roams every room' : `Resident of ${roomLabel(r.home)}`, (r.ai ? `Found in ${uniq.join(', ')}.` : uniq.length > 1 ? `Also works in ${uniq.slice(1).join(', ')}.` : `Used in ${uniq[0]}.`) + doing];
+      const uniq = [...new Set(r.homes.map(roomLabel))], kind = h.w.s.lang ? 'Language' : h.w.s.placeholder ? 'Stack' : '';
+      return [h.w.s.name, r.ai ? 'AI visitor · roams every room' : `${kind ? kind + ' · ' : ''}Resident of ${roomLabel(r.home)}`, (r.ai ? `Found in ${uniq.join(', ')}.` : h.w.s.lang ? `${uniq.join(', ')} ${uniq.length > 1 ? 'are' : 'is'} written in ${h.w.s.name}.` : uniq.length > 1 ? `Also works in ${uniq.slice(1).join(', ')}.` : `Used in ${uniq[0]}.`) + doing];
     }
     if (h.kind === 'crowd') {
       const n = stats.followers;
@@ -906,7 +925,7 @@
       return [`★ ${fmtN(s.v)} ${s.v === 1 ? 'star' : 'stars'}`, s.label === 'repos without a room' ? 'Stars from repos without a room' : `One of ${s.label}'s stars`, `${s.label === 'repos without a room' ? 'Those repos have' : `${s.label} has`} ${fmtN(s.total)} stars in all. Tiny stars count 1, then 10, 100, 1,000, 10,000 and 100,000 as they get bigger.`];
     }
     if (h.kind === 'badge') { const [k, note, name] = profile.badges[h.b.i]; return [name || (BADGES[k] || BADGES.medal).name, 'Badge · framed in the gallery hallway', note]; }
-    if (h.kind === 'post') return [custom.name || profile.house, `Est. ${profile.cal.since}`, `@${profile.handle}'s house. ${owner ? 'Rename it in Edit house.' : 'Rename it in Customize.'}`];
+    if (h.kind === 'post') return [custom.name || profile.house, `Est. ${profile.cal.since}`, `@${profile.handle}'s house.${owner ? ' Rename it in Edit house.' : ''}`];
     if (h.kind === 'rug') { const c = profile.cal; return ['Contribution rug', 'Woven from the last year of commits', `${fmtN(c.total)} contributions over ${c.days} commit days. Longest streak: ${c.longest} days. Busiest day: ${c.busiest}.`]; }
     if (h.kind === 'sign') {
       const rm = roomByKey(h.id);
@@ -928,20 +947,22 @@
     tip.style.left = Math.max(8, x) + 'px'; tip.style.top = Math.max(8, y) + 'px';
   }
 
-  // ---------- customize (visitors, this browser only) and edit house (owner, saved for everyone) ----------
-  let draft = null;
+  // ---------- edit house: the connected owner only ----------
+  // Edits apply on the spot and wait in this browser as a draft; publishing commits them to the owner's own GitHub.
   function openCustom() {
-    if (owner && !draft) draft = { rooms: settings && settings.rooms ? settings.rooms.slice() : null, bonus: settings && settings.bonus ? settings.bonus.slice() : null, fixes: JSON.parse(JSON.stringify((settings && settings.fixes) || {})), keep: !!(settings && Number.isInteger(settings.layout)) };
+    if (!owner) { openGitHub('connect'); return; }
     buildCustom(); openModal($('#custom-modal'));
   }
-  function markDirty() { const b = $('#c-save'); if (b) { b.disabled = !dirty; b.textContent = dirty ? 'Save for everyone' : 'Saved'; } }
+  function markDirty() {
+    const b = $('#c-save');
+    if (b) { b.disabled = !dirty; b.textContent = dirty ? 'Publish to GitHub' : 'Everything is published'; }
+    const d = $('#c-discard'); if (d) d.hidden = !dirty;
+    ownerUI();
+  }
   function buildCustom() {
-    $('#custom-title').textContent = owner ? 'Edit your house' : 'Make it yours';
-    $('#c-who').textContent = owner
-      ? 'Changes show up right away. Press Save for everyone so every visitor sees them too.'
-      : `Only you see these changes, in this browser. @${profile.handle} can sign in with GitHub to change the house for everyone.`;
     $('#c-days').textContent = `@${profile.handle} has ${cdays()} commit days. Commit days unlock wallpapers and pets.`;
     $('#c-name').value = custom.name || profile.house;
+    $('#plan-reset').hidden = !shuffle;
     $('#c-papers').innerHTML = WALLPAPERS.map(w => { const lk = !unlocked(w.days); return `<button type="button" class="opt" data-paper="${w.id}" aria-pressed="${custom.paper === w.id}" ${lk ? 'disabled' : ''}><i style="background:${w.c.paper};box-shadow:inset 0 -6px 0 ${w.c.lo}"></i><span>${w.name}</span><small>${lk ? `${w.days} days` : 'Unlocked'}</small></button>`; }).join('');
     const pets = $('#c-pets');
     pets.innerHTML = '';
@@ -956,66 +977,97 @@
     });
     document.querySelectorAll('[data-light]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.light === custom.light)));
     $('#c-tags').checked = !!custom.tags;
-    $('#owner-tools').hidden = !owner;
-    if (owner) buildOwnerTools();
+    buildOwnerTools();
     markDirty();
   }
   function buildOwnerTools() {
-    $('#c-keep').checked = draft.keep;
     // rooms: every repo, busiest first; up to ten get a room
-    const vis = visible().slice().sort(byCommits), chosen = draft.rooms || pickRepos().map(r => r.id);
-    let pn = 0;
-    const label = r => r.private ? `Private repo ${++pn}` : r.name;
+    const vis = visible().slice().sort(byCommits), chosen = (settings && settings.rooms) || pickRepos().map(r => r.id);
     $('#c-rooms').innerHTML = vis.map(r => {
-      const on = chosen.includes(r.id), full = chosen.length >= 10 && !on;
-      return `<label class="pick${on ? ' on' : ''}"><input type="checkbox" data-room="${esc(r.id)}" ${on ? 'checked' : ''} ${full ? 'disabled' : ''}><span class="sw" style="background:${esc(r.color)}"></span><span class="nm">${r.private ? '<span class="lock" aria-hidden="true"></span>' : ''}${esc(label(r))}<small>${esc(r.main)} · ${fmtN(r.commits)} commits${r.stars ? ` · ★ ${short(r.stars)}` : ''}</small></span></label>`;
+      const on = chosen.includes(r.id), full = chosen.length >= 10 && !on, n = r.commits == null ? 'not counted yet' : `${fmtN(r.commits)} commits`;
+      return `<label class="pick${on ? ' on' : ''}"><input type="checkbox" data-room="${esc(r.id)}" ${on ? 'checked' : ''} ${full ? 'disabled' : ''}><span class="sw" style="background:${esc(r.color)}"></span><span class="nm">${esc(r.name)}<small>${esc(r.main)} · ${n}${r.stars ? ` · ★ ${short(r.stars)}` : ''}</small></span></label>`;
     }).join('') || '<p class="ai-note">No repos to pick from yet.</p>';
     $('#c-room-count').textContent = `${Math.min(10, chosen.filter(id => vis.some(r => r.id === id)).length)} of 10`;
-    const bonusOn = draft.bonus || rooms.filter(r => r.special).map(r => r.special);
+    const bonusOn = (settings && settings.bonus) || rooms.filter(r => r.special).map(r => r.special);
     $('#c-bonus').innerHTML = Object.keys(BONUS).map(id => `<label class="pick${bonusOn.includes(id) ? ' on' : ''}"><input type="checkbox" data-bonus="${id}" ${bonusOn.includes(id) ? 'checked' : ''}><span class="sw" style="background:${BONUS[id].color}"></span><span class="nm">${BONUS[id].label}<small>${esc(BONUS[id].why(stats))}</small></span></label>`).join('');
-    // residents: fix what the detector got wrong, room by room
-    const cast = Object.keys(SPR).filter(id => !SPR[id].pet && !SPR[id].npc).sort((a, b) => SPR[a].name.localeCompare(SPR[b].name));
-    const roomsNow = rooms.filter(r => r.repo);
+    // residents: fix what the detector got wrong, room by room (anyone GitRoom knows can be added)
+    const everyone = window.GitRoomData.castList().filter(c => !SPR[c.id] || (!SPR[c.id].pet && !SPR[c.id].npc));
+    const fixes = (settings && settings.fixes) || {}, roomsNow = rooms.filter(r => r.repo);
+    const nameOf = id => (SPR[id] ? SPR[id].name : (everyone.find(c => c.id === id) || { name: id }).name);
     $('#c-fixes').innerHTML = roomsNow.map(rm => {
-      const r = profile.repos.find(x => x.id === rm.repo.id), f = draft.fixes[r.id] || { add: [], remove: [] };
-      const orig = [...r.fw, ...r.ai].filter(id => SPR[id]), current = [...new Set([...orig, ...f.add])];
+      const r = profile.repos.find(x => x.id === rm.repo.id), f = fixes[r.id] || { add: [], remove: [] };
+      const orig = [...r.fw, ...r.ai].filter(id => SPR[id]), current = [...new Set([...orig, ...(f.add || [])])];
       const chips = current.map(id => {
-        const gone = f.remove.includes(id);
-        return `<button type="button" class="fixchip${gone ? ' gone' : ''}" data-fix="${esc(r.id)}" data-id="${id}" title="${gone ? 'Bring back' : 'Remove'} ${esc(SPR[id].name)}">${esc(SPR[id].name)} <b aria-hidden="true">${gone ? '↺' : '×'}</b></button>`;
+        const gone = (f.remove || []).includes(id);
+        return `<button type="button" class="fixchip${gone ? ' gone' : ''}" data-fix="${esc(r.id)}" data-id="${esc(id)}" title="${gone ? 'Bring back' : 'Remove'} ${esc(nameOf(id))}">${esc(nameOf(id))} <b aria-hidden="true">${gone ? '↺' : '×'}</b></button>`;
       }).join('');
-      const options = cast.filter(id => !current.includes(id)).map(id => `<option value="${id}">${esc(SPR[id].name)}</option>`).join('');
-      return `<div class="fixrow"><b>${rm.repo.private ? '<span class="lock" aria-hidden="true"></span>' : ''}${esc(rm.label)}</b><div class="fixchips">${chips || '<small>Nobody yet.</small>'}<select data-add="${esc(r.id)}" aria-label="Add a resident to ${esc(rm.label)}"><option value="">+ Add…</option>${options}</select></div></div>`;
+      const options = everyone.filter(c => !current.includes(c.id)).map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+      return `<div class="fixrow"><b>${esc(rm.label)}</b><div class="fixchips">${chips || '<small>Nobody yet.</small>'}<select data-add="${esc(r.id)}" aria-label="Add a resident to ${esc(rm.label)}"><option value="">+ Add…</option>${options}</select></div></div>`;
     }).join('') || '<p class="ai-note">Pick some rooms first.</p>';
   }
   // owner edits apply on the spot, and the room picks feed straight into the model
-  function applyDraft(rebuild) {
-    settings = { ...(settings || {}), rooms: draft.rooms, bonus: draft.bonus, fixes: draft.fixes };
-    dirty = true;
-    if (rebuild) { buildModel(); fillProfile(); makeHouse(false); }
+  function applyEdit(patch, rebuild) {
+    const next = { ...currentSettings(), ...patch };
+    Object.keys(patch).forEach(k => { if (patch[k] == null) delete next[k]; });
+    settings = window.GitRoomData.cleanSettings(next);
+    dirty = !same(settings, published);
+    window.GitRoomData.setDraft(login, dirty ? settings : null);
+    if (rebuild) { castPlaceholders(); buildModel(); fillProfile(); makeHouse(false); }
     buildCustom();
   }
-  async function saveOwner() {
-    const body = {
-      settings: {
-        name: custom.name, paper: custom.paper, pet: custom.pet, light: custom.light, tags: !!custom.tags,
-        ...(draft && draft.keep ? { layout: shuffle } : {}),
-        ...(draft && draft.rooms ? { rooms: draft.rooms } : {}),
-        ...(draft && draft.bonus ? { bonus: draft.bonus } : {}),
-        fixes: draft ? draft.fixes : (settings && settings.fixes) || {},
-      },
-    };
-    const b = $('#c-save');
-    b.disabled = true; b.textContent = 'Saving…';
-    try {
-      const res = await fetch(`/api/house/${encodeURIComponent(profile.handle)}/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j.error || 'Saving failed.');
-      settings = j.settings; dirty = false; markDirty();
-      toast('Saved. Everyone who visits sees this house now.');
-    } catch (e) {
-      dirty = true; markDirty();
-      toast(e.message);
-    }
+  // rooms for repos GitRoom hadn't counted yet: count and furnish them first
+  async function ensureDetails(ids) {
+    const missing = ids.filter(id => { const r = profile.repos.find(x => x.id === id); return r && !r.detailed; });
+    if (!missing.length) return;
+    toast(`Counting commits in ${missing.length === 1 ? missing[0] : `${missing.length} repos`}…`);
+    for (const id of missing) { try { await window.GitRoomData.loadRepo(profile, id); } catch (e) { toast(e.code === 'rate' ? 'GitHub needs a short breather. Try that room again in a few minutes.' : "Couldn't read that repo right now."); } }
+  }
+  function discardEdits() {
+    settings = published ? { ...published } : null;
+    window.GitRoomData.setDraft(login, null);
+    dirty = false;
+    shuffle = settings && Number.isInteger(settings.layout) ? settings.layout : 0;
+    loadCustom(); castPlaceholders(); buildModel(); fillProfile(); makeHouse(false); buildCustom();
+    toast('Back to the published house.');
+  }
+
+  // ---------- connect and publish: one commit to the owner's own profile repo ----------
+  let ghJob = null, ghWatch = null, ghKind = 'connect';
+  async function openGitHub(kind) {
+    ghKind = kind;
+    const branch = pubBranch || (profile.profileRepo && profile.profileRepo.branch) || 'main';
+    ghJob = await window.GitRoomData.prepareCommit(login, kind === 'publish' ? currentSettings() : (published || {}), branch);
+    const repo = `${profile.handle}/${profile.handle}`;
+    $('#gh-title').textContent = kind === 'connect' ? 'Connect GitHub' : 'Publish your changes';
+    $('#gh-intro').textContent = kind === 'connect'
+      ? `Prove this is your house by committing one small file to your GitHub. Then you can edit @${profile.handle}'s house from this browser. Only @${profile.handle} can do this.`
+      : 'Your changes go into a new file in your profile repo. Commit it and every visitor sees the new house within a minute.';
+    $('#gh-repo-name').textContent = repo; $('#gh-repo-name-2').textContent = repo;
+    $('#gh-step-repo').hidden = !!(profile.profileRepo || published);
+    $('#gh-repo-link').href = window.GitRoomData.createRepoURL(profile.handle);
+    $('#gh-commit-title').textContent = kind === 'connect' ? 'Commit your house file' : 'Commit the new house file';
+    $('#gh-commit-link').href = ghJob.url;
+    $('#gh-wait').hidden = true;
+    openModal($('#gh-modal'));
+  }
+  function watchGitHub() {
+    $('#gh-wait').hidden = false;
+    $('#gh-wait-text').textContent = 'Waiting for your commit. This page checks every few seconds.';
+    if (ghWatch) ghWatch.stop();
+    ghWatch = window.GitRoomData.watchCommit(login, ghJob, { onFound: committed });
+  }
+  async function committed(s) {
+    ghWatch = null;
+    const was = settings;
+    published = s; settings = { ...s }; pubBranch = ghJob.branch;
+    owner = await window.GitRoomData.isOwner(login, published);
+    dirty = false; window.GitRoomData.setDraft(login, null);
+    closeModal($('#gh-modal'));
+    if (!same(was, settings)) { shuffle = Number.isInteger(settings.layout) ? settings.layout : 0; loadCustom(); castPlaceholders(); buildModel(); makeHouse(false); }
+    fillProfile();
+    if (!owner) { toast('Found the file, but it was made in another browser. Connect from this one to edit here.'); return; }
+    toast(ghKind === 'connect' ? "Connected! It's officially your house. Press Edit house to make it yours." : 'Published! Everyone who visits sees your house now.');
+    if (ghKind === 'connect' && !reduce) cheerBurst();
   }
 
   // ---------- share images ----------
@@ -1122,7 +1174,7 @@
   function blocks(w) {
     const out = [], o = shareOpts, s = stats, c = profile.cal;
     if (o.stats) {
-      const cellsS = [[short(c.total), 'CONTRIBUTIONS'], [String(c.days), 'COMMIT DAYS'], [`${c.longest}D`, 'BEST STREAK'], [short(s.stars), 'STARS'], [short(s.followers), 'FOLLOWERS'], [String(s.repos), 'REPOS']];
+      const cellsS = [[short(c.total), 'CONTRIBUTIONS'], [String(c.days), 'COMMIT DAYS'], [String(c.longest), 'DAY STREAK'], [short(s.stars), 'STARS'], [short(s.followers), 'FOLLOWERS'], [String(s.repos), 'REPOS']];
       out.push({ id: 'stats', h: 214, draw: (x, X, Y) => cellsS.forEach(([n, l], i) => { const col = i % 3, row = Math.floor(i / 3), cx = X + w * (col + .5) / 3, y = Y + row * 108; const sc = fitSc(n, w / 3 - 24, 7); TC(x, n, cx, y + (35 - sc * 5), '#24163b', sc); TC(x, l, cx, y + 50, '#6b5a80', fitSc(l, w / 3 - 16, 3)); }) });
     }
     const L = langMix();
@@ -1208,7 +1260,7 @@
     drawHouse(x, layer, s, W / 2, top + Math.max(0, (room - layer.height * s) / 2));
     plaque(x, 30, stripY, W - 60, 140);
     if (A) audience(x, A, 40, stripY - A.h + 12);
-    const c2 = profile.cal, cellsS = [[short(c2.total), 'CONTRIBUTIONS'], [short(stats.stars), 'STARS'], [`${c2.longest}D`, 'BEST STREAK'], [short(stats.followers), 'FANS']];
+    const c2 = profile.cal, cellsS = [[short(c2.total), 'CONTRIBUTIONS'], [short(stats.stars), 'STARS'], [String(c2.longest), 'DAY STREAK'], [short(stats.followers), 'FANS']];
     cellsS.forEach(([n, l], i) => { const cx = 30 + (W - 60) * (i + .5) / 4; TC(x, n, cx, stripY + 30, '#24163b', fitSc(n, 220, 6)); TC(x, l, cx, stripY + 74, '#6b5a80', 2); });
     T(x, 'GITROOM', W - 30 - 6 - textWidth('GITROOM') * 3 - 14, stripY + 108, '#24163b', 3);
     return c;
@@ -1315,7 +1367,7 @@
   }
   function progress(n, total, label) {
     $('#rec-fill').style.width = Math.min(100, n / total * 100) + '%';
-    $('#rec-btn .pixel').textContent = label || `Rendering… ${Math.round(n / total * 100)}%`;
+    $('#rec-btn .label').textContent = label || `Rendering… ${Math.round(n / total * 100)}%`;
   }
   function endJob(job) {
     job.out.remove();
@@ -1429,13 +1481,13 @@
     $('#copy-btn').hidden = vid;
     $('#story-modal').classList.toggle('recording', !!rec);
     $('#rec-btn').disabled = !!rec;
-    if (!rec) { $('#rec-btn .pixel').textContent = videoURL ? 'Make it again' : `Make ${SECONDS}s video`; $('#rec-fill').style.width = videoURL ? '100%' : '0%'; }
+    if (!rec) { $('#rec-btn .label').textContent = videoURL ? 'Make it again' : `Make ${SECONDS}s video`; $('#rec-fill').style.width = videoURL ? '100%' : '0%'; }
     if (vid) {
-      save.querySelector('.pixel').textContent = 'Save video';
+      save.querySelector('.label').textContent = 'Save video';
       if (videoURL && !rec) { save.href = videoURL; save.download = `${profile.handle}-gitroom-${shareOpts.fmt}.${videoExt}`; save.classList.remove('off'); }
       else { save.removeAttribute('href'); save.classList.add('off'); }
     } else {
-      save.querySelector('.pixel').textContent = 'Save PNG';
+      save.querySelector('.label').textContent = 'Save image';
       save.classList.remove('off');
       if (shareURL) { save.href = shareURL; save.download = shareName(); }
     }
@@ -1490,11 +1542,12 @@
 
   // ---------- modals ----------
   let lastFocus = null;
-  function openModal(m) { lastFocus = document.activeElement; m.hidden = false; const f = m.querySelector('[data-close]'); if (f) f.focus(); }
+  function openModal(m) { lastFocus = document.activeElement; m.hidden = false; document.body.classList.add('modal-open'); const f = m.querySelector('[data-close]'); if (f) f.focus(); }
   function closeModal(m) {
     m.hidden = true;
+    if (![...document.querySelectorAll('.modal')].some(x => !x.hidden)) document.body.classList.remove('modal-open');
     if (m.id === 'story-modal') { posed = false; if (rec) { stopVideo(true); toast('Video cancelled.'); } }
-    if (m.id === 'custom-modal' && owner && dirty) toast('Not saved for visitors yet. Open Edit house and press Save for everyone.');
+    if (m.id === 'custom-modal' && owner && dirty) toast('Your changes are kept in this browser. Publish them so visitors see them too.');
     if (lastFocus) lastFocus.focus();
   }
 
@@ -1506,11 +1559,47 @@
       gsap.to(o, { v: end, duration: 1.3, ease: 'power3.out', delay: .3, onUpdate: () => { b.textContent = fmt(o.v, b.dataset.fmt); } });
     });
   }
-  function stageMsg(kind, text) {
+  function stageMsg(kind, text, title) {
     const el = $('#stage-msg');
     if (!kind) { el.hidden = true; return; }
     el.hidden = false; el.dataset.kind = kind;
+    if (title) $('#msg-title').textContent = title;
     el.querySelector('.msg-text').textContent = text;
+  }
+  // a resident keeps you company while the house loads (and looks sorry if it can't)
+  let msgPal = null;
+  function msgArt() {
+    const cv = $('#msg-art'), x = cv.getContext('2d'), ids = ['react', 'claude', 'cat', 'pytorch', 'docker', 'vite', 'next', 'dog'].filter(id => SPR[id]);
+    msgPal = msgPal || pick(ids);
+    x.clearRect(0, 0, 24, 24);
+    x.drawImage(SPR[msgPal].frames.stand, 4, 4);
+  }
+  let roomsTotal = 0;
+  const setFill = p => { const f = $('#msg-fill'); if (f) f.style.width = Math.max(4, Math.min(100, p)) + '%'; };
+  function onStep(name, n) {
+    const t = $('#stage-msg .msg-text');
+    if (name === 'server') { t.textContent = 'Knocking on the door…'; setFill(18); }
+    else if (name === 'browser') { t.textContent = 'Reading GitHub straight from your browser…'; setFill(22); }
+    else if (name === 'repos') { t.textContent = 'Counting the repos…'; setFill(32); }
+    else if (name === 'rooms') { roomsTotal = n; t.textContent = `Measuring ${n} rooms…`; setFill(40); }
+    else if (name === 'room') { t.textContent = `Furnishing room ${n} of ${roomsTotal}…`; setFill(40 + 56 * n / Math.max(1, roomsTotal)); }
+  }
+  function showError(e, name) {
+    const mins = e.reset ? Math.max(1, Math.ceil((e.reset - Date.now()) / 60000)) : 0;
+    const [title, text] = e.code === 'not-found' ? ['No house here', `There's no GitHub user called @${name}. Check the spelling?`]
+      : e.code === 'org' ? ['Organizations live elsewhere', e.message]
+      : e.code === 'invalid' ? ['That name looks off', "GitHub usernames use letters, numbers and single dashes."]
+      : e.code === 'rate' ? ['GitHub needs a breather', `GitHub lets every network look up a few houses an hour for free, and yours has used them up. Try again in ${mins || 'a few'} minute${mins === 1 ? '' : 's'}, or drop by a featured house below.`]
+      : ["Couldn't reach GitHub", e.message || 'Check your connection and try again.'];
+    stageMsg('error', text, title);
+    setFill(100);
+    $('#handle').textContent = '@' + name;
+    $('#sub').textContent = e.code === 'not-found' ? 'No such GitHub user' : 'This house is taking a break';
+    $('#stage-msg .msg-actions').innerHTML = e.code === 'rate' || e.code === 'down' || e.code === 'slow' || !e.code
+      ? `<button class="btn hot" type="button" data-retry>Try again</button><a class="btn" href="/">Home</a>`
+      : `<a class="btn hot" href="/">Try another username</a>`;
+    const r = $('[data-retry]'); if (r) r.addEventListener('click', () => location.reload());
+    document.body.classList.add('house-error');
   }
   // the yellow circle wipe carries over from the landing page and back
   function reveal() {
@@ -1523,39 +1612,68 @@
     try { sessionStorage.setItem('gitroom-wipe', '1'); } catch (e) {}
     gsap.fromTo(wipe, { clipPath: `circle(0% at ${cx}px ${cy}px)` }, { clipPath: `circle(150% at ${cx}px ${cy}px)`, duration: .55, ease: 'power3.in', onComplete: () => { location.href = href; } });
   }
+  function exploreList() {
+    const here = (profile ? profile.handle : login).toLowerCase();
+    $('#explore-list').innerHTML = window.GitRoomData.FEATURED.filter(x => x !== here).map(x => `<a class="chipbtn" href="/u/${x}">@${x}</a>`).join('');
+  }
+  function shareLinks() {
+    const url = `${location.origin}/u/${profile.handle}`;
+    $('#share-link').value = url.replace(/^https?:\/\//, '');
+    const text = owner ? 'My GitHub, but it’s a pixel house 🏠' : `@${profile.handle}’s GitHub, but it’s a pixel house 🏠`;
+    $('#share-x').href = `https://twitter.com/intent/tweet?${new URLSearchParams({ text, url })}`;
+    $('#share-li').href = `https://www.linkedin.com/sharing/share-offsite/?${new URLSearchParams({ url })}`;
+  }
   function show(p) {
     profile = p;
-    mode = 'public';
+    login = p.handle;
     shuffle = settings && Number.isInteger(settings.layout) ? settings.layout : 0;
+    castPlaceholders();
     loadCustom();
     stageMsg(null);
     roomVisible = true;
-    buildModel(); fillProfile(); makeHouse(true); countUp();
+    $('#share-btn').disabled = false;
+    buildModel(); fillProfile(); makeHouse(true); countUp(); shareLinks();
+    document.title = `${custom.name || p.house} · @${p.handle} · GitRoom`;
     if (!reduce) {
-      gsap.from('.side section', { x: -18, opacity: 0, stagger: .1, duration: .45, ease: 'power3.out' });
-      gsap.from('.room-bar > *', { y: -14, opacity: 0, stagger: .06, duration: .4, ease: 'power3.out' });
+      gsap.from('.side .panel', { y: 16, opacity: 0, stagger: .08, duration: .45, ease: 'power3.out' });
+      gsap.from('.profile > *', { y: -10, opacity: 0, stagger: .06, duration: .4, ease: 'power3.out' });
     }
-    if (profile.reauth) toast('Your GitHub sign-in expired, so this is the public house.');
   }
-  async function boot(login) {
-    stageMsg('loading', `Reading @${login}'s repos…`);
-    viewer = await fetch('/api/auth/me', { cache: 'no-store' }).then(r => r.json()).catch(() => ({}));
-    owner = !!viewer.login && viewer.login.toLowerCase() === login.toLowerCase();
-    if (owner) stageMsg('loading', 'Reading your repos, private ones too if you allowed it…');
-    const [data, saved] = await Promise.all([
-      fetch(`/api/house/${encodeURIComponent(login)}${owner ? '?me=1' : ''}`).then(r => r.json()).catch(() => null),
-      fetch(`/api/house/${encodeURIComponent(login)}/settings`, { cache: 'no-store' }).then(r => r.json()).catch(() => null),
-    ]);
-    settings = (saved && saved.settings) || null;
-    if (!data || !data.profile) {
-      stageMsg('error', (data && data.error) || "Couldn't reach GitHub. Check your connection and try again.");
-      $('#handle').textContent = '@' + login;
+  async function boot(name) {
+    login = name;
+    msgArt();
+    stageMsg('loading', 'Knocking on the door…', `Building @${name}'s house`);
+    setFill(8);
+    exploreList();
+    const D = window.GitRoomData;
+    const own = D.loadSettings(name).catch(() => ({ settings: null }));
+    let res;
+    try {
+      res = await D.loadHouse(name, { step: onStep, rooms: own.then(o => (o.settings && o.settings.rooms) || []) });
+    } catch (e) {
+      if (window.console && !e.code) console.error(e);
+      showError(e, name);
       reveal();
       return;
     }
-    if (data.profile.reauth) owner = false;
-    show(data.profile);
+    setFill(100);
+    const saved = await own;
+    published = saved.settings || null;
+    pubBranch = saved.branch || null;
+    owner = await D.isOwner(name, published);
+    settings = published ? { ...published } : null;
+    if (owner) {
+      const d = D.getDraft(name);
+      if (d) { settings = D.cleanSettings({ ...d, keys: published.keys }); dirty = !same(settings, published); }
+    }
+    profile = res.profile;
+    if (settings && settings.rooms) await ensureDetails(settings.rooms);
+    show(res.profile);
+    if (res.source === 'stale') toast('GitHub needs a short breather, so this is the copy from your last visit.');
     reveal();
+    // "Connect GitHub" on the home page sends owners here with ?connect=1
+    const q = new URLSearchParams(location.search);
+    if (q.has('connect')) { try { history.replaceState(null, '', location.pathname); } catch (e) {} if (!owner) openGitHub('connect'); else toast("You're already connected here. Press Edit house."); }
   }
 
   // ---------- wiring ----------
@@ -1565,6 +1683,7 @@
     tmp = canvas(64, 64); tctx = tmp.getContext('2d');
     shadow = (() => { const c = canvas(10, 3), x = c.getContext('2d'); x.fillStyle = 'rgba(70,22,4,.34)'; x.fillRect(2, 0, 6, 1); x.fillRect(0, 1, 10, 1); x.fillRect(2, 2, 6, 1); return c; })();
     starArt(); iconArt();
+    drawMap($('#logo-mark'), window.PX.LOGO, window.PX.LOGO_PAL);
     // the little heart signs some fans hold up
     heartCard = (() => {
       const c = canvas(9, 10), x = c.getContext('2d');
@@ -1581,10 +1700,9 @@
       const next = darkNow() ? 'light' : 'dark';
       document.documentElement.dataset.theme = next; store.set('gitroom-theme', next);
     }));
-    document.querySelectorAll('[data-vis]').forEach(b => b.addEventListener('click', () => { if (profile) setMode(b.dataset.vis); }));
     window.addEventListener('resize', () => { if (!roomVisible || !P) return; fitStage(); if (zoomed === 'free') { clampCam(); applyCam(); } else zoomTo(zoomed, true); });
     $('#overview-btn').addEventListener('click', () => zoomTo(null));
-    document.addEventListener('click', e => { const b = e.target.closest('[data-zoom]'); if (b && P) zoomTo(zoomed === b.dataset.zoom ? null : b.dataset.zoom); });
+    document.addEventListener('click', e => { const b = e.target.closest('[data-zoom]'); if (b && P) { zoomTo(zoomed === b.dataset.zoom ? null : b.dataset.zoom); if (window.innerWidth < 900) stage.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' }); } });
     $('#resident-list').addEventListener('click', e => {
       if (e.target.closest('[data-crowd]')) { zoomTo(null); cheerBurst(); toast(`${fmtN(stats.followers)} fans cheering outside. One for every follower.`); return; }
       const b = e.target.closest('[data-ping]');
@@ -1593,12 +1711,6 @@
       if (!w) return;
       zoomTo(P.roomAt(w.x, w.y) || w.zone); ping(w);
       if (window.innerWidth < 900) stage.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' });
-    });
-    $('#shuffle-btn').addEventListener('click', () => {
-      if (!profile) return;
-      shuffle++; makeHouse(true);
-      if (owner && draft && draft.keep) { dirty = true; markDirty(); }
-      toast(owner ? 'New floor plan. To keep it, tick Keep this floor plan in Edit house and save.' : 'New floor plan. Same rooms, same residents.');
     });
     wireCamera();
 
@@ -1612,10 +1724,20 @@
       if (h && h.kind !== 'room' && touch) { showTip(tipData(h), e.clientX, e.clientY); clearTimeout(tipT); tipT = setTimeout(() => { tip.hidden = true; }, 3000); }
       if (h && h.kind === 'res') { if (zoomed !== 'free') zoomTo(P.roomAt(h.w.x, h.w.y) || h.w.zone); ping(h.w); }
       else if (h && (h.kind === 'sign' || h.kind === 'room')) { if (zoomed !== 'free') zoomTo(zoomed === h.id ? null : h.id); }
-      else if (h && h.kind === 'post') openCustom();
+      else if (h && h.kind === 'post' && owner) openCustom();
       else if (!h && zoomed && zoomed !== 'free') zoomTo(null);
     });
 
+    // visit another house
+    $('#visit-form').addEventListener('submit', e => {
+      e.preventDefault();
+      const name = $('#visit-input').value.trim().replace(/^@/, '').replace(/^(https?:\/\/)?(www\.)?github\.com\//i, '').replace(/[/?#].*$/, '');
+      if (!window.GitRoomData.VALID_LOGIN.test(name)) { toast(name ? "That doesn't look like a GitHub username." : 'Type a GitHub username first.'); $('#visit-input').focus(); return; }
+      const r = $('#visit-input').getBoundingClientRect();
+      leaveTo('/u/' + encodeURIComponent(name), r.left + r.width / 2, r.top + r.height / 2);
+    });
+
+    // owner: edit, connect, publish
     let nameT;
     $('#c-name').addEventListener('input', e => {
       custom.name = e.target.value.replace(/[^\w '&.-]/g, '').slice(0, 18) || profile.house; signpost = null; post = null; saveCustom();
@@ -1626,39 +1748,45 @@
     $('#c-pets').addEventListener('click', e => { const b = e.target.closest('[data-pet]'); if (!b || b.disabled) return; custom.pet = b.dataset.pet; saveCustom(); spawnPet(); buildCustom(); });
     document.querySelectorAll('[data-light]').forEach(b => b.addEventListener('click', () => { custom.light = b.dataset.light; saveCustom(); relight(); buildCustom(); }));
     $('#c-tags').addEventListener('change', e => { custom.tags = e.target.checked; saveCustom(); });
-    $('#custom-btn').addEventListener('click', () => { if (profile) openCustom(); });
-    // owner tools
-    $('#c-keep').addEventListener('change', e => { draft.keep = e.target.checked; dirty = true; markDirty(); });
-    $('#c-rooms').addEventListener('change', e => {
+    $('#shuffle-btn').addEventListener('click', () => { if (!owner) return; shuffle++; makeHouse(true); saveCustom(); buildCustom(); toast('New floor plan. Publish to keep it for everyone.'); });
+    $('#plan-reset').addEventListener('click', () => { if (!owner) return; shuffle = 0; makeHouse(true); saveCustom(); buildCustom(); });
+    ['#custom-btn', '#edit-btn'].forEach(s => $(s).addEventListener('click', () => { if (profile) openCustom(); }));
+    $('#connect-btn').addEventListener('click', () => { if (profile) openGitHub('connect'); });
+    $('#publish-btn').addEventListener('click', () => { if (owner) openGitHub('publish'); });
+    $('#c-save').addEventListener('click', () => { if (!owner || !dirty) return; closeModal($('#custom-modal')); openGitHub('publish'); });
+    $('#c-discard').addEventListener('click', discardEdits);
+    $('#c-rooms').addEventListener('change', async e => {
       const i = e.target.closest('[data-room]'); if (!i) return;
-      const cur = draft.rooms || pickRepos().map(r => r.id);
-      draft.rooms = i.checked ? [...new Set([...cur, i.dataset.room])].slice(0, 10) : cur.filter(id => id !== i.dataset.room);
-      if (!draft.rooms.length) draft.rooms = null;
-      applyDraft(true);
+      const cur = (settings && settings.rooms) || pickRepos().map(r => r.id);
+      const next = i.checked ? [...new Set([...cur, i.dataset.room])].slice(0, 10) : cur.filter(id => id !== i.dataset.room);
+      if (i.checked) await ensureDetails([i.dataset.room]);
+      applyEdit({ rooms: next.length ? next : null }, true);
     });
-    $('#c-rooms-auto').addEventListener('click', () => { draft.rooms = null; applyDraft(true); });
+    $('#c-rooms-auto').addEventListener('click', () => applyEdit({ rooms: null }, true));
     $('#c-bonus').addEventListener('change', e => {
       const i = e.target.closest('[data-bonus]'); if (!i) return;
-      const cur = draft.bonus || rooms.filter(r => r.special).map(r => r.special);
-      draft.bonus = i.checked ? [...new Set([...cur, i.dataset.bonus])] : cur.filter(id => id !== i.dataset.bonus);
-      applyDraft(true);
+      const cur = (settings && settings.bonus) || rooms.filter(r => r.special).map(r => r.special);
+      applyEdit({ bonus: i.checked ? [...new Set([...cur, i.dataset.bonus])] : cur.filter(id => id !== i.dataset.bonus) }, true);
     });
+    const fixesCopy = () => JSON.parse(JSON.stringify((settings && settings.fixes) || {}));
     $('#c-fixes').addEventListener('click', e => {
       const b = e.target.closest('[data-fix]'); if (!b) return;
-      const f = draft.fixes[b.dataset.fix] || (draft.fixes[b.dataset.fix] = { add: [], remove: [] }), id = b.dataset.id;
+      const fixes = fixesCopy(), f = fixes[b.dataset.fix] || (fixes[b.dataset.fix] = { add: [], remove: [] }), id = b.dataset.id;
       if (f.remove.includes(id)) f.remove = f.remove.filter(x => x !== id);
       else if (f.add.includes(id)) f.add = f.add.filter(x => x !== id);
       else f.remove.push(id);
-      applyDraft(true);
+      applyEdit({ fixes }, true);
     });
     $('#c-fixes').addEventListener('change', e => {
       const s = e.target.closest('[data-add]'); if (!s || !s.value) return;
-      const f = draft.fixes[s.dataset.add] || (draft.fixes[s.dataset.add] = { add: [], remove: [] });
+      const fixes = fixesCopy(), f = fixes[s.dataset.add] || (fixes[s.dataset.add] = { add: [], remove: [] });
       f.remove = f.remove.filter(x => x !== s.value);
       if (!f.add.includes(s.value)) f.add.push(s.value);
-      applyDraft(true);
+      applyEdit({ fixes }, true);
     });
-    $('#c-save').addEventListener('click', saveOwner);
+    $('#gh-commit-link').addEventListener('click', () => watchGitHub());
+    $('#gh-check').addEventListener('click', () => { if (ghWatch) ghWatch.now(); else watchGitHub(); });
+    window.addEventListener('focus', () => { if (ghWatch) ghWatch.now(); });
 
     // share
     document.querySelectorAll('[data-fmt-btn]').forEach(b => b.addEventListener('click', () => setShare({ fmt: b.dataset.fmtBtn })));
@@ -1682,14 +1810,18 @@
       const vid = shareKind === 'video', blob = vid ? videoBlob : shareBlob;
       if (!blob) return;
       const file = vid ? new File([blob], `${profile.handle}-gitroom.${videoExt}`, { type: blob.type }) : new File([blob], shareName(), { type: 'image/png' });
-      try { await navigator.share({ files: [file], title: `${custom.name || profile.house} · GitRoom` }); }
-      catch (err) { if (err && err.name !== 'AbortError') toast(`Sharing didn't work here. Use Save ${vid ? 'video' : 'PNG'} instead.`); }
+      try { await navigator.share({ files: [file], title: `${custom.name || profile.house} · GitRoom`, text: `${location.origin}/u/${profile.handle}` }); }
+      catch (err) { if (err && err.name !== 'AbortError') toast(`Sharing didn't work here. Use Save ${vid ? 'video' : 'image'} instead.`); }
     });
     document.querySelectorAll('[data-share-kind]').forEach(b => b.addEventListener('click', () => { if (rec) return; shareKind = b.dataset.shareKind; if (shareKind === 'video') warmVideo(); setVideoUI(); }));
     $('#rec-btn').addEventListener('click', startVideo);
     $('#copy-btn').addEventListener('click', async () => {
       try { if (!shareBlob || !window.ClipboardItem) throw new Error('x'); await navigator.clipboard.write([new ClipboardItem({ 'image/png': shareBlob })]); toast('Image copied.'); }
-      catch (e) { toast("Copying images isn't allowed here. Use Save PNG instead."); }
+      catch (e) { toast("Copying images isn't allowed here. Use Save image instead."); }
+    });
+    $('#copy-link').addEventListener('click', async () => {
+      const url = `${location.origin}/u/${profile.handle}`;
+      try { await navigator.clipboard.writeText(url); toast('Link copied.'); } catch (e) { $('#share-link').select(); toast('Press Ctrl+C (or ⌘C) to copy.'); }
     });
     $('#back-btn').addEventListener('click', e => {
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.button) return;
@@ -1731,6 +1863,17 @@
     shuffle() { if (!profile) return null; shuffle++; makeHouse(false); return inspect(); },
     // the same house with a different number of fans outside (null goes back to the real number)
     fans(n) { if (!profile) return null; fanTest = n; makeHouse(false); return inspect(); },
+    // the house as it looks right now (crowd and all) on a transparent background, scaled up with square pixels
+    snapshot({ scale = 4, crowd = true, light } = {}) {
+      if (!P) return null;
+      if (light && light !== lightMode()) { custom.light = light; relight(); }
+      R.frame(clock, lightMode(), 99); drawScene(octx, 'live');
+      const b = bounds(crowd), c = canvas(b.w * scale, b.h * scale), x = c.getContext('2d');
+      x.imageSmoothingEnabled = false;
+      x.drawImage(glc, b.x, b.y, b.w, b.h, 0, 0, b.w * scale, b.h * scale);
+      x.drawImage(ov, b.x, b.y, b.w, b.h, 0, 0, b.w * scale, b.h * scale);
+      return c.toDataURL('image/png');
+    },
     mount({ login }) {
       if (started) return;
       started = true;

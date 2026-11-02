@@ -1,8 +1,9 @@
 'use client';
 import { useEffect } from 'react';
+import * as GitRoomData from '@/lib/client';
 
 // The pixel engine is plain browser JS in /public/engine (it owns the canvases and the DOM it was given).
-// These load its files in order, once per page, then hand over to it.
+// These load its files in order, once per page, then hand over to it. Its data comes from lib/client.js.
 const CAST = ['/engine/avatars-a.js', '/engine/avatars-b.js', '/engine/avatars-c.js', '/engine/avatars-d.js', '/engine/sprites.js'];
 const SCRIPTS = {
   landing: ['/vendor/gsap.min.js', ...CAST, '/engine/landing.js'],
@@ -27,6 +28,7 @@ function load(src) {
 }
 
 export async function loadEngine(page) {
+  window.GitRoomData = GitRoomData;
   for (const src of SCRIPTS[page]) await load(src);
 }
 
