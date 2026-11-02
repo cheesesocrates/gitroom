@@ -5,6 +5,12 @@ import { GitHubMark, SearchIcon } from '@/app/components/Icons';
 
 const VALID = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i;
 
+// the page itself only depends on the username, so each one is rendered once and served as static HTML;
+// the featured houses are ready at build time
+export function generateStaticParams() {
+  return ['karpathy', 'torvalds', 'gaearon', 'yyx990803', 'shadcn', 'cheesesocrates'].map(login => ({ login }));
+}
+
 export async function generateMetadata({ params }) {
   const { login } = await params;
   if (!VALID.test(login)) return { title: 'GitRoom' };
